@@ -1,5 +1,5 @@
 // CHU-TIMER PWA service worker — オフライン起動用。画面を上げるとき番号を上げる。
-const CACHE = 'chu-timer-v2';
+const CACHE = 'chu-timer-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 

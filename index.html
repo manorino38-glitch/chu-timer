@@ -11,7 +11,7 @@
 <title>CHU-TIMER</title>
 <style>
   :root{ --ink:#1c1c1e; --sub:#8a8a8e; --faint:#bfbfc6; --card:#f5f6f8; --line:#e5e5ea;
-         --green:#34c759; --amber:#ff9f0a; --red:#ff3b30; --blue:#0a84ff; --bg:#ffffff; }
+         --green:#34c759; --amber:#ff9f0a; --red:#ff3b30; --blue:#0a84ff; --orange:#ff8c00; --bg:#ffffff; }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body{ margin:0; height:100%; background:var(--bg); color:var(--ink);
     font-family:-apple-system,"Hiragino Sans","Meiryo",sans-serif; }
@@ -26,13 +26,20 @@
   .time .col{ color:var(--faint); font-weight:300; }
   .state{ color:var(--sub); font-size:14px; min-height:20px; margin-top:2px; }
   .btns{ display:flex; gap:10px; margin-top:22px; width:100%; max-width:420px; }
-  button{ flex:1; border:0; border-radius:16px; padding:16px 0; font-size:16px; font-weight:700;
+  button{ border:0; border-radius:16px; padding:16px 0; font-size:16px; font-weight:700;
     color:#fff; font-family:inherit; transition:transform .05s, filter .15s; }
+  .btns button{ flex:1; }
   button:active{ transform:scale(.97); }
   button:disabled{ background:#e9e9ee !important; color:var(--sub); }
   #start{ background:var(--green); } #pause{ background:var(--amber); } #stop{ background:var(--red); }
-  .status{ color:var(--sub); font-size:12px; margin-top:16px; text-align:center; min-height:16px; }
-  .today{ margin-top:20px; width:100%; max-width:420px; background:var(--card);
+  #lap{ background:var(--orange); width:100%; max-width:420px; margin-top:10px; }
+  .laps{ width:100%; max-width:420px; margin-top:8px; }
+  .laphead{ display:flex; justify-content:space-between; align-items:center; color:var(--sub); font-size:12px; margin-bottom:2px; }
+  .laphead button{ flex:0 0 auto; width:auto; background:none; color:var(--blue); font-size:13px; padding:4px 6px; font-weight:600; }
+  .laprow{ display:flex; justify-content:space-between; font-family:"SF Mono",Consolas,monospace;
+    font-size:14px; padding:5px 6px; color:var(--ink); border-bottom:1px solid var(--line); }
+  .status{ color:var(--sub); font-size:12px; margin-top:14px; text-align:center; min-height:16px; }
+  .today{ margin-top:18px; width:100%; max-width:420px; background:var(--card);
     border:1px solid var(--line); border-radius:14px; padding:12px 14px; font-size:14px; }
   .today h3{ margin:0 0 6px; font-size:13px; color:var(--sub); font-weight:600; }
   .today .row{ display:flex; justify-content:space-between; padding:3px 0; color:var(--ink); }
@@ -44,8 +51,8 @@
   dialog input{ width:100%; padding:10px; border:1px solid var(--line); border-radius:10px;
     font-size:15px; font-family:inherit; }
   dialog .dlg-btns{ display:flex; gap:8px; margin-top:16px; }
-  dialog button{ color:#fff; background:var(--blue); }
-  dialog button.sec{ background:#e9e9ee; color:var(--ink); }
+  dialog .dlg-btns button{ flex:1; color:#fff; background:var(--blue); }
+  dialog .dlg-btns button.sec{ background:#e9e9ee; color:var(--ink); }
 </style>
 </head>
 <body>
@@ -60,6 +67,8 @@
     <button id="pause" onclick="onPause()" disabled>一時停止</button>
     <button id="stop" onclick="onStop()" disabled>停止</button>
   </div>
+  <button id="lap" onclick="onLap()" disabled>ラップ</button>
+  <div class="laps" id="laps"></div>
   <div class="status" id="status"></div>
   <div class="today">
     <h3>今日のセッション</h3>
@@ -82,19 +91,22 @@
 const PHRASES = ["集中しています……","没入しています……","ゾーンに入っています……","深く潜っています……",
   "手を動かしています……","エンジン全開です……","無心です……","時間を忘れています……"];
 const WD = ["日","月","火","水","木","金","土"];
-const LS = { url:'chu_url', token:'chu_token', queue:'chu_queue' };
+const LS = { url:'chu_url', token:'chu_token', queue:'chu_queue', session:'chu_session' };
 
-let state='idle', sessionStart=null, accumulated=0, runStarted=null, todayBase=0;
+let state='idle', sessionStart=null, accumulated=0, runStarted=null, todayBase=0, laps=[];
 
 // 要素は明示取得(id "stop"/"status" は window の組み込みと衝突するため必須)
 const startBtn=document.getElementById('start');
 const pauseBtn=document.getElementById('pause');
 const stopBtn=document.getElementById('stop');
+const lapBtn=document.getElementById('lap');
 const statusEl=document.getElementById('status');
 
 function cfg(){ return { url:localStorage.getItem(LS.url)||'', token:localStorage.getItem(LS.token)||'' }; }
 function pad(n){ return String(n).padStart(2,'0'); }
-function hms(sec){ sec=Math.floor(sec); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60; return [h,m,s]; }
+function hms(sec){ sec=Math.floor(sec); return [Math.floor(sec/3600),Math.floor(sec%3600/60),sec%60]; }
+function hmsStr(sec){ const [h,m,s]=hms(sec); return `${pad(h)}:${pad(m)}:${pad(s)}`; }
+function state_el(){ return document.getElementById('state'); }
 
 function sessionElapsed(){
   let s=accumulated;
@@ -107,25 +119,49 @@ function tick(){
   const now=new Date();
   clock.textContent = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} (${WD[now.getDay()]}) ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   setBig(todayBase + sessionElapsed());
-  requestAnimationFrame(()=>{});
 }
 setInterval(tick,250); tick();
+setInterval(()=>{ if(state==='running') state_el().textContent=PHRASES[Math.floor(Math.random()*PHRASES.length)]; },18000);
 
-let phraseTimer=setInterval(()=>{ if(state==='running') state_el().textContent=PHRASES[Math.floor(Math.random()*PHRASES.length)]; },18000);
-function state_el(){ return document.getElementById('state'); }
+// --- 状態の保存/復元(閉じても・落ちても続きから) ---
+function saveSession(){
+  if(state==='idle'){ localStorage.removeItem(LS.session); return; }
+  localStorage.setItem(LS.session, JSON.stringify({
+    state, sessionStart: sessionStart?sessionStart.getTime():null,
+    accumulated, runStarted, laps }));
+}
+function loadSession(){
+  try{
+    const s=JSON.parse(localStorage.getItem(LS.session)||'null');
+    if(!s || (s.state!=='running' && s.state!=='paused')) return;
+    state=s.state; sessionStart=s.sessionStart?new Date(s.sessionStart):null;
+    accumulated=s.accumulated||0; runStarted=s.runStarted||null; laps=s.laps||[];
+    if(state==='running'){
+      startBtn.textContent='開始'; startBtn.disabled=true; pauseBtn.disabled=false; stopBtn.disabled=false;
+      state_el().textContent=PHRASES[0];
+    }else{
+      startBtn.textContent='再開'; startBtn.disabled=false; pauseBtn.disabled=true; stopBtn.disabled=false;
+      state_el().textContent='ひと休み中……（再開でつづき）';
+    }
+    renderLaps();
+  }catch(e){}
+}
 
+// --- メイン操作 ---
 function onStart(){
   const now=new Date();
-  if(state==='idle'){ sessionStart=now; accumulated=0; }
+  if(state==='idle'){ sessionStart=now; accumulated=0; laps=[]; }
   runStarted=Date.now(); state='running';
   state_el().textContent=PHRASES[Math.floor(Math.random()*PHRASES.length)];
   startBtn.textContent='開始'; startBtn.disabled=true; pauseBtn.disabled=false; stopBtn.disabled=false;
+  renderLaps(); saveSession();
 }
 function onPause(){
   if(state!=='running')return;
   accumulated+=(Date.now()-runStarted)/1000; runStarted=null; state='paused';
   state_el().textContent='ひと休み中……（再開でつづき）';
   startBtn.textContent='再開'; startBtn.disabled=false; pauseBtn.disabled=true;
+  updateLapBtn(); saveSession();
 }
 function onStop(){
   if(state==='idle')return;
@@ -135,9 +171,40 @@ function onStop(){
   state='idle'; sessionStart=null; accumulated=0;
   state_el().textContent='待機中'; startBtn.textContent='開始';
   startBtn.disabled=false; pauseBtn.disabled=true; stopBtn.disabled=true;
+  updateLapBtn(); saveSession();               // idle なので保存はクリアされる
   if(secs>=1) sendSession(startDt,endDt,secs);
+  // ラップは次の開始まで画面に残す(コピーできるように)
 }
 
+// --- ラップ(区間計測。押した瞬間から測るので、まず1回で起点) ---
+function onLap(){
+  if(state!=='running')return;
+  const elapsed=sessionElapsed();
+  const prev=laps.length?laps[laps.length-1].elapsed:0;
+  laps.push({ no:laps.length+1, elapsed:elapsed, split:elapsed-prev });
+  renderLaps(); saveSession();
+}
+function updateLapBtn(){
+  if(state==='running'&&laps.length===0) lapBtn.textContent='ラップ測定開始';
+  else lapBtn.textContent='ラップ';
+  lapBtn.disabled=(state!=='running');
+}
+function renderLaps(){
+  updateLapBtn();
+  const el=document.getElementById('laps');
+  if(!laps.length){ el.innerHTML=''; return; }
+  el.innerHTML = `<div class="laphead"><span>ラップ（区間＝スプリット）</span><button onclick="copyLaps()">コピー</button></div>` +
+    laps.map(l=>`<div class="laprow"><span>#${pad(l.no)}　${hmsStr(l.elapsed)}</span><span>+${hmsStr(l.split)}</span></div>`).join('');
+}
+function copyLaps(){
+  if(!laps.length)return;
+  const txt=laps.map(l=>`${pad(l.no)}\t${hmsStr(l.elapsed)}\t+${hmsStr(l.split)}`).join('\n');
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(()=>statusEl.textContent='ラップをコピーしました').catch(()=>{});
+  }
+}
+
+// --- 送信(GAS) ---
 function buildRecord(startDt,endDt,secs){
   const d=startDt;
   return { date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
@@ -161,8 +228,7 @@ async function postRecord(rec){
   const c=cfg(); if(!c.url||!c.token) return false;
   try{
     const res=await fetch(c.url,{ method:'POST', body:JSON.stringify({token:c.token,record:rec}) });
-    const j=await res.json();
-    return j && j.ok;
+    const j=await res.json(); return j && j.ok;
   }catch(e){ return false; }
 }
 async function flushQueue(){
@@ -171,24 +237,23 @@ async function flushQueue(){
   for(const rec of q){ const ok=await postRecord(rec); if(!ok) rest.push(rec); }
   queueSet(rest);
 }
-
 async function refreshToday(){
-  const c=cfg(); if(!c.url||!c.token){ return; }
+  const c=cfg(); if(!c.url||!c.token) return;
   try{
     const res=await fetch(`${c.url}?action=today&token=${encodeURIComponent(c.token)}`);
-    const j=await res.json();
-    if(!j.ok) return;
-    todayBase = (j.total_min||0)*60;
+    const j=await res.json(); if(!j.ok) return;
+    todayBase=(j.total_min||0)*60 + (state!=='idle'?0:0);
     const list=document.getElementById('today-list');
     if(!j.sessions.length){ list.innerHTML='<div class="row"><span>まだありません</span></div>'; }
     else{
       list.innerHTML = `<div class="row"><b>合計</b><b>${fmtMin(j.total_min)} / ${j.count}件</b></div>` +
-        j.sessions.map(s=>`<div class="row"><span>${s.start.slice(0,5)}–${s.end.slice(0,5)} <small style="color:var(--faint)">${s.source}</small></span><span>${(+s.focus_min).toFixed(1)}分</span></div>`).join('');
+        j.sessions.map(s=>`<div class="row"><span>${String(s.start).slice(0,5)}–${String(s.end).slice(0,5)} <small style="color:var(--faint)">${s.source}</small></span><span>${(+s.focus_min).toFixed(1)}分</span></div>`).join('');
     }
   }catch(e){}
 }
 function fmtMin(t){ t=Math.round(t); const h=Math.floor(t/60),m=t%60; return h?`${h}時間${m}分`:`${m}分`; }
 
+// --- 設定 ---
 function openSettings(){ const c=cfg(); document.getElementById('cfg-url').value=c.url; document.getElementById('cfg-token').value=c.token; document.getElementById('settings').showModal(); }
 function saveSettings(){
   localStorage.setItem(LS.url, document.getElementById('cfg-url').value.trim());
@@ -197,7 +262,9 @@ function saveSettings(){
   statusEl.textContent='接続設定を保存しました'; flushQueue().then(refreshToday);
 }
 
-// 起動時
+// --- 起動 ---
+loadSession();
+updateLapBtn();
 if(!cfg().url||!cfg().token){ openSettings(); } else { flushQueue().then(refreshToday); }
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
 </script>
