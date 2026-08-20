@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="CHU-TIMER">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<title>CHU-TIMER</title>
+<style>
+  :root{ --ink:#1c1c1e; --sub:#8a8a8e; --faint:#bfbfc6; --card:#f5f6f8; --line:#e5e5ea;
+         --green:#34c759; --amber:#ff9f0a; --red:#ff3b30; --blue:#0a84ff; --bg:#ffffff; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,"Hiragino Sans","Meiryo",sans-serif; }
+  body{ display:flex; flex-direction:column; align-items:center;
+    padding:max(16px,env(safe-area-inset-top)) 18px max(16px,env(safe-area-inset-bottom)); }
+  header{ display:flex; align-items:center; gap:8px; margin-top:6px; }
+  header img{ height:34px; }
+  .clock{ color:var(--sub); font-size:13px; margin-top:8px; }
+  .cap{ color:var(--faint); font-size:12px; margin-top:14px; }
+  .time{ font-family:"SF Mono",Consolas,monospace; font-size:64px; font-weight:300;
+    letter-spacing:1px; margin:2px 0 0; line-height:1.1; }
+  .time .col{ color:var(--faint); font-weight:300; }
+  .state{ color:var(--sub); font-size:14px; min-height:20px; margin-top:2px; }
+  .btns{ display:flex; gap:10px; margin-top:22px; width:100%; max-width:420px; }
+  button{ flex:1; border:0; border-radius:16px; padding:16px 0; font-size:16px; font-weight:700;
+    color:#fff; font-family:inherit; transition:transform .05s, filter .15s; }
+  button:active{ transform:scale(.97); }
+  button:disabled{ background:#e9e9ee !important; color:var(--sub); }
+  #start{ background:var(--green); } #pause{ background:var(--amber); } #stop{ background:var(--red); }
+  .status{ color:var(--sub); font-size:12px; margin-top:16px; text-align:center; min-height:16px; }
+  .today{ margin-top:20px; width:100%; max-width:420px; background:var(--card);
+    border:1px solid var(--line); border-radius:14px; padding:12px 14px; font-size:14px; }
+  .today h3{ margin:0 0 6px; font-size:13px; color:var(--sub); font-weight:600; }
+  .today .row{ display:flex; justify-content:space-between; padding:3px 0; color:var(--ink); }
+  .gear{ position:fixed; top:calc(env(safe-area-inset-top) + 10px); right:14px;
+    background:none; color:var(--sub); width:auto; font-size:20px; padding:6px; }
+  dialog{ border:0; border-radius:16px; padding:20px; width:88%; max-width:360px; }
+  dialog h2{ margin:0 0 12px; font-size:17px; }
+  dialog label{ display:block; font-size:13px; color:var(--sub); margin:10px 0 4px; }
+  dialog input{ width:100%; padding:10px; border:1px solid var(--line); border-radius:10px;
+    font-size:15px; font-family:inherit; }
+  dialog .dlg-btns{ display:flex; gap:8px; margin-top:16px; }
+  dialog button{ color:#fff; background:var(--blue); }
+  dialog button.sec{ background:#e9e9ee; color:var(--ink); }
+</style>
+</head>
+<body>
+  <button class="gear" onclick="openSettings()">⚙️</button>
+  <header><img src="icons/icon-180.png" alt=""><span style="font-size:20px;font-weight:800;letter-spacing:1px">CHU-TIMER</span></header>
+  <div class="clock" id="clock"></div>
+  <div class="cap">今日の累計集中</div>
+  <div class="time" id="time"><span id="hh">00</span><span class="col">:</span><span id="mm">00</span><span class="col">:</span><span id="ss">00</span></div>
+  <div class="state" id="state">待機中</div>
+  <div class="btns">
+    <button id="start" onclick="onStart()">開始</button>
+    <button id="pause" onclick="onPause()" disabled>一時停止</button>
+    <button id="stop" onclick="onStop()" disabled>停止</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="today">
+    <h3>今日のセッション</h3>
+    <div id="today-list"><div class="row"><span>まだありません</span></div></div>
+  </div>
+
+  <dialog id="settings">
+    <h2>接続設定</h2>
+    <label>ウェブアプリURL（/exec で終わる）</label>
+    <input id="cfg-url" placeholder="https://script.google.com/macros/s/.../exec">
+    <label>APIトークン</label>
+    <input id="cfg-token" placeholder="setup で発行された文字列">
+    <div class="dlg-btns">
+      <button onclick="saveSettings()">接続する</button>
+      <button class="sec" onclick="document.getElementById('settings').close()">閉じる</button>
+    </div>
+  </dialog>
+
+<script>
+const PHRASES = ["集中しています……","没入しています……","ゾーンに入っています……","深く潜っています……",
+  "手を動かしています……","エンジン全開です……","無心です……","時間を忘れています……"];
+const WD = ["日","月","火","水","木","金","土"];
+const LS = { url:'chu_url', token:'chu_token', queue:'chu_queue' };
+
+let state='idle', sessionStart=null, accumulated=0, runStarted=null, todayBase=0;
+
+function cfg(){ return { url:localStorage.getItem(LS.url)||'', token:localStorage.getItem(LS.token)||'' }; }
+function pad(n){ return String(n).padStart(2,'0'); }
+function hms(sec){ sec=Math.floor(sec); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60; return [h,m,s]; }
+
+function sessionElapsed(){
+  let s=accumulated;
+  if(state==='running'&&runStarted) s+=(Date.now()-runStarted)/1000;
+  return s;
+}
+function setBig(sec){ const [h,m,s]=hms(sec); hh.textContent=pad(h); mm.textContent=pad(m); ss.textContent=pad(s); }
+
+function tick(){
+  const now=new Date();
+  clock.textContent = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} (${WD[now.getDay()]}) ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  setBig(todayBase + sessionElapsed());
+  requestAnimationFrame(()=>{});
+}
+setInterval(tick,250); tick();
+
+let phraseTimer=setInterval(()=>{ if(state==='running') state_el().textContent=PHRASES[Math.floor(Math.random()*PHRASES.length)]; },18000);
+function state_el(){ return document.getElementById('state'); }
+
+function onStart(){
+  const now=new Date();
+  if(state==='idle'){ sessionStart=now; accumulated=0; }
+  runStarted=Date.now(); state='running';
+  state_el().textContent=PHRASES[Math.floor(Math.random()*PHRASES.length)];
+  start.textContent='開始'; start.disabled=true; pause.disabled=false; stop.disabled=false;
+}
+function onPause(){
+  if(state!=='running')return;
+  accumulated+=(Date.now()-runStarted)/1000; runStarted=null; state='paused';
+  state_el().textContent='ひと休み中……（再開でつづき）';
+  start.textContent='再開'; start.disabled=false; pause.disabled=true;
+}
+function onStop(){
+  if(state==='idle')return;
+  if(state==='running'&&runStarted){ accumulated+=(Date.now()-runStarted)/1000; runStarted=null; }
+  const secs=accumulated, startDt=sessionStart, endDt=new Date();
+  todayBase+=secs; // 表示は0に戻さない
+  state='idle'; sessionStart=null; accumulated=0;
+  state_el().textContent='待機中'; start.textContent='開始';
+  start.disabled=false; pause.disabled=true; stop.disabled=true;
+  if(secs>=1) sendSession(startDt,endDt,secs);
+}
+
+function buildRecord(startDt,endDt,secs){
+  const d=startDt;
+  return { date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
+    start:`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`,
+    end:`${pad(endDt.getHours())}:${pad(endDt.getMinutes())}:${pad(endDt.getSeconds())}`,
+    focus_min:Math.round(secs/60*100)/100, start_hour:d.getHours(), weekday:WD[d.getDay()],
+    note:'', source:'iPhone' };
+}
+function queueGet(){ try{return JSON.parse(localStorage.getItem(LS.queue)||'[]');}catch(e){return[];} }
+function queueSet(q){ localStorage.setItem(LS.queue,JSON.stringify(q)); }
+
+async function sendSession(startDt,endDt,secs){
+  const rec=buildRecord(startDt,endDt,secs);
+  status.textContent='保存中…';
+  const ok=await postRecord(rec);
+  if(ok){ status.textContent='✓ 保存しました'; }
+  else { const q=queueGet(); q.push(rec); queueSet(q); status.textContent='△ オフライン: あとで送信します'; }
+  refreshToday();
+}
+async function postRecord(rec){
+  const c=cfg(); if(!c.url||!c.token) return false;
+  try{
+    const res=await fetch(c.url,{ method:'POST', body:JSON.stringify({token:c.token,record:rec}) });
+    const j=await res.json();
+    return j && j.ok;
+  }catch(e){ return false; }
+}
+async function flushQueue(){
+  let q=queueGet(); if(!q.length) return;
+  const rest=[];
+  for(const rec of q){ const ok=await postRecord(rec); if(!ok) rest.push(rec); }
+  queueSet(rest);
+}
+
+async function refreshToday(){
+  const c=cfg(); if(!c.url||!c.token){ return; }
+  try{
+    const res=await fetch(`${c.url}?action=today&token=${encodeURIComponent(c.token)}`);
+    const j=await res.json();
+    if(!j.ok) return;
+    todayBase = (j.total_min||0)*60;
+    const list=document.getElementById('today-list');
+    if(!j.sessions.length){ list.innerHTML='<div class="row"><span>まだありません</span></div>'; }
+    else{
+      list.innerHTML = `<div class="row"><b>合計</b><b>${fmtMin(j.total_min)} / ${j.count}件</b></div>` +
+        j.sessions.map(s=>`<div class="row"><span>${s.start.slice(0,5)}–${s.end.slice(0,5)} <small style="color:var(--faint)">${s.source}</small></span><span>${(+s.focus_min).toFixed(1)}分</span></div>`).join('');
+    }
+  }catch(e){}
+}
+function fmtMin(t){ t=Math.round(t); const h=Math.floor(t/60),m=t%60; return h?`${h}時間${m}分`:`${m}分`; }
+
+function openSettings(){ const c=cfg(); document.getElementById('cfg-url').value=c.url; document.getElementById('cfg-token').value=c.token; document.getElementById('settings').showModal(); }
+function saveSettings(){
+  localStorage.setItem(LS.url, document.getElementById('cfg-url').value.trim());
+  localStorage.setItem(LS.token, document.getElementById('cfg-token').value.trim());
+  document.getElementById('settings').close();
+  status.textContent='接続設定を保存しました'; flushQueue().then(refreshToday);
+}
+
+// 起動時
+if(!cfg().url||!cfg().token){ openSettings(); } else { flushQueue().then(refreshToday); }
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
+</script>
+</body>
+</html>
